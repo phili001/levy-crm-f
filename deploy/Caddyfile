@@ -1,0 +1,22 @@
+# Caddy pide y renueva el certificado de Let's Encrypt solo, con que el dominio
+# apunte a este servidor. Es lo único que hace: todo lo demás (el panel, la API,
+# el widget, los WebSockets) cuelga del nginx del propio panel, que ya reparte
+# por rutas dentro del mismo dominio (frontend/nginx.conf).
+#
+# CRM_DOMAIN y CRM_ADMIN_EMAIL salen del .env que escribe install.sh.
+{
+	email {$CRM_ADMIN_EMAIL}
+}
+
+{$CRM_DOMAIN} {
+	encode gzip
+	# Caddy ya manda X-Forwarded-For y X-Forwarded-Proto. Con nginx detrás son
+	# dos proxies: TRUSTED_PROXY_COUNT=2, igual que en Coolify.
+	reverse_proxy frontend:80 {
+		# Una llamada de voz o un inbox abierto mantienen el WebSocket una hora.
+		transport http {
+			read_timeout 3600s
+			write_timeout 3600s
+		}
+	}
+}

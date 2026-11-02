@@ -1,0 +1,407 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Design tokens
+   Grafito frío, cobalto y superficies planas.
+
+   La ARQUITECTURA (canales RGB por tema + nombres semánticos) se conserva
+   del sistema anterior porque es buena y porque 63 ficheros la consumen;
+   lo que cambia son los VALORES. Eso es además lo que hace posible la
+   pantalla de Apariencia: personalizar la instalación es reescribir estas
+   variables en runtime, sin tocar un solo componente.
+
+   La identidad no vive en el color —es lo primero que cada cliente
+   cambiará—, sino en la postura: radios apretados, bordes en vez de
+   sombras, y una sola familia tipográfica sin serif de adorno.
+   ============================================================ */
+/* Canales RGB (espaciado-separado) por tema. Los tokens de Tailwind los
+   consumen como `rgb(var(--x-rgb) / <alpha-value>)`, de modo que los
+   modificadores de opacidad (p. ej. bg-ink/40) siguen funcionando y, a la
+   vez, el color cambia con la clase `.dark`. */
+:root {
+  /* Controles nativos (checkbox, popup de <select>, date picker) acompañan
+     al tema: sin esto salen siempre claros aunque la interfaz esté en dark. */
+  color-scheme: light;
+
+  --paper-rgb: 244 246 249;
+  --paper-2-rgb: 236 239 244;
+  --paper-3-rgb: 224 229 236;
+  --card-rgb: 252 253 254;
+
+  /* Escala de tinta, medida sobre `paper` (WCAG AA):
+     ink 15.8:1 · ink-2 9.8:1 · ink-3 6.6:1 · ink-4 4.8:1.
+     ink-4 es el suelo: nunca baja de 4.5:1 porque lo usan las horas de los
+     mensajes y los hints a 10-11px, que son texto PEQUEÑO. Y hay hueco real
+     entre ink-3 e ink-4: si se acercan, la jerarquía desaparece aunque los
+     dos pasen el mínimo. */
+  --ink-rgb: 24 28 36;
+  --ink-2-rgb: 55 63 76;
+  --ink-3-rgb: 78 88 104;
+  /* ink-4 es la tinta más floja: la usan las horas de los mensajes y los
+     hints a 10-11px. El sistema anterior ya lo había subido una vez porque
+     estaba por debajo del mínimo, y al cambiar la paleta se volvió a caer
+     (3.09:1). Se sube hasta 4.83:1, que es lo que pide WCAG AA para texto
+     pequeño — no el 3:1 de texto grande, porque aquí SIEMPRE es pequeño.
+     Sigue por debajo de ink-3 (4.90:1), así que la jerarquía se mantiene. */
+  --ink-4-rgb: 99 109 126;
+
+  --brand-ink-rgb: 27 64 188;
+
+  /* Fondo suave de marca (chips activos, tarjetas seleccionadas). En claro es
+     el pistacho pálido de la escala; en dark, un tinte translúcido del brand
+     sobre el papel oscuro. Lo consume el token Tailwind `bg-brand-soft`. */
+  --brand-soft: #e6ecff;
+
+  --line: rgba(24, 28, 36, 0.12);
+  --line-2: rgba(24, 28, 36, 0.07);
+
+  /* Sombras Coro por tema: en claro, tinta cálida muy diluida; en dark esa
+     misma tinta desaparece sobre gris oscuro, así que se sustituyen por negro
+     más denso (ver .dark). Las consume tailwind.config.js (shadow-coro-*). */
+  --shadow-coro-1: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-coro-2: 0 4px 12px rgba(15, 23, 42, 0.07);
+  --shadow-coro-3: 0 16px 40px rgba(15, 23, 42, 0.13);
+
+  /* Marca: idéntica en claro y oscuro. Va en canales RGB como el resto para
+     que Tailwind pueda aplicarle opacidad (bg-brand/40) y para que Apariencia
+     la cambie reescribiendo solo estas cuatro líneas en runtime
+     (src/lib/apariencia.ts); los `--brand`, `--brand-600`… completos se
+     derivan de aquí abajo. 600 y 700 son el hover y el pulsado; `on` es la
+     tinta sobre una superficie de marca. */
+  --brand-rgb: 35 80 230;
+  --brand-600-rgb: 27 64 188;
+  --brand-700-rgb: 20 48 144;
+  --brand-on-rgb: 247 249 255;
+
+  /* Tipografía de la interfaz. La consume tailwind.config.js (font-sans,
+     font-display, font-numbers); Apariencia la cambia en runtime. */
+  --font-sans: "Figtree";
+
+  /* Grosor del trazo de los iconos de Lucide (fino 1.5 · normal 2 ·
+     grueso 2.5). Solo afecta a los que llevan el trazo por defecto; los que
+     lo fijan a mano en el componente lo hacen por algo y se respetan. */
+  --icono-trazo: 2;
+
+  /* Colores de CANAL: identifican de dónde viene una conversación, así que
+     el verde es el de WhatsApp a propósito —es información, no decoración—
+     y no se toca al cambiar de marca. */
+  /* Series de las gráficas. NO son los colores de marca ni los de estado:
+     una serie pintada de rojo hace que un agente normal parezca un error.
+     El orden es fijo y NO se cicla — la serie 6 se pliega en «Otros».
+
+     Validadas con el script de `dataviz` contra la superficie de cada tema
+     (banda de luminosidad, suelo de croma, separación para daltonismo y
+     contraste). El par rosa↔violeta es el más justo: ΔE 14.0 protan.
+     Si tocas una, vuelve a pasar el validador — a ojo no se ve que dos
+     colores son indistinguibles para quien no distingue el rojo. */
+  --serie-1: #2a5be8;
+  --serie-2: #009090;
+  --serie-3: #a85400;
+  --serie-4: #6d4aae;
+  --serie-5: #c2185b;
+
+  --ch-wa: #25d366;
+  --ch-web: #0e9f9f;
+  --ch-voice: #c2427a;
+
+  --state-ok: #2da771;
+  --state-warn: #e58a2f;
+  --state-bad: #dc4b3c;
+}
+
+.dark {
+  color-scheme: dark;
+
+  /* Grafito azulado: el mismo tinte frío que en claro, para que la marca no
+     cambie de temperatura al cruzar de tema. */
+  --paper-rgb: 15 18 24;
+  --paper-2-rgb: 21 25 33;
+  --paper-3-rgb: 31 37 47;
+  --card-rgb: 19 23 31;
+
+  --ink-rgb: 232 236 243;
+  --ink-2-rgb: 193 201 212;
+  --ink-3-rgb: 155 165 180;
+  /* Mismo criterio en dark: 4.44:1 se queda a un pelo del mínimo para texto
+     pequeño. Se sube a ~5.1:1, sin pasar de ink-3 (6.27:1). */
+  --ink-4-rgb: 126 136 152;
+
+  --brand-ink-rgb: 147 176 255;
+
+  --brand-soft: rgb(var(--brand-rgb) / 0.20);
+
+  --line: rgba(232, 236, 243, 0.13);
+  --line-2: rgba(232, 236, 243, 0.07);
+
+  /* Las mismas series, re-escalonadas para fondo oscuro. No es el mismo
+     color aclarado por el navegador: son pasos elegidos y validados aparte
+     contra la superficie oscura. */
+  --serie-1: #4a74f5;
+  --serie-2: #12a5a5;
+  --serie-3: #c47a2e;
+  --serie-4: #8a6bd1;
+  --serie-5: #db4d7e;
+
+  --shadow-coro-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-coro-2: 0 4px 12px rgba(0, 0, 0, 0.50);
+  --shadow-coro-3: 0 16px 40px rgba(0, 0, 0, 0.62);
+}
+
+/* Variables de color completas derivadas de los canales. Se definen una sola
+   vez: al heredar el canal sobreescrito por `.dark`, estas también cambian.
+   Las consumen los estilos inline y reglas CSS que usan `var(--paper)` etc. */
+:root {
+  --paper: rgb(var(--paper-rgb));
+  --paper-2: rgb(var(--paper-2-rgb));
+  --paper-3: rgb(var(--paper-3-rgb));
+  --card: rgb(var(--card-rgb));
+
+  --ink: rgb(var(--ink-rgb));
+  --ink-2: rgb(var(--ink-2-rgb));
+  --ink-3: rgb(var(--ink-3-rgb));
+  --ink-4: rgb(var(--ink-4-rgb));
+
+  --brand-ink: rgb(var(--brand-ink-rgb));
+
+  --brand: rgb(var(--brand-rgb));
+  --brand-600: rgb(var(--brand-600-rgb));
+  --brand-700: rgb(var(--brand-700-rgb));
+  --brand-on: rgb(var(--brand-on-rgb));
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    background-color: var(--paper);
+    color: var(--ink);
+  }
+  ::selection {
+    background: var(--brand);
+    color: var(--brand-on);
+  }
+  /* Grosor de los iconos desde Apariencia. Solo los que llevan el trazo por
+     defecto de Lucide (2): un icono que lo fija a mano en el componente lo
+     hace por algo. CSS gana al atributo de presentación del SVG. */
+  svg.lucide[stroke-width="2"] {
+    stroke-width: var(--icono-trazo);
+  }
+}
+
+/* ============================================================
+   Componentes
+   ============================================================ */
+@layer components {
+  /* Lienzo del hilo de mensajes.
+     Textura propia hecha con gradientes: nada de imagen de fondo. Un PNG
+     costaría una petición y varios KB, y además ataría el panel a UNA marca
+     concreta — esto se tiñe solo con los tokens, así que sobrevive a que un
+     cliente cambie la paleta desde Apariencia.
+     Es deliberadamente casi invisible: separa el hilo del resto del panel sin
+     competir con el texto de los mensajes. */
+  .lienzo-chat {
+    background-color: rgb(var(--paper-2-rgb));
+    background-image:
+      radial-gradient(circle at 18% 22%, rgb(var(--ink-rgb) / 0.075) 1.2px, transparent 1.9px),
+      radial-gradient(circle at 68% 74%, rgb(var(--ink-rgb) / 0.055) 1.2px, transparent 1.9px);
+    background-size: 34px 34px, 46px 46px;
+    background-position: 0 0, 17px 23px;
+  }
+  .dark .lienzo-chat {
+    background-image:
+      radial-gradient(circle at 18% 22%, rgb(255 255 255 / 0.055) 1.2px, transparent 1.9px),
+      radial-gradient(circle at 68% 74%, rgb(255 255 255 / 0.040) 1.2px, transparent 1.9px);
+  }
+
+  /* Separador de día: píldora centrada sobre el lienzo, como en cualquier
+     app de mensajería. Va pegada arriba al hacer scroll para no perder de
+     vista en qué día estás dentro de un hilo largo. */
+  .separador-dia {
+    @apply sticky top-0 z-10 mx-auto my-3 w-fit rounded-full border border-line
+           bg-card/90 px-3 py-1 text-[11px] font-semibold uppercase
+           tracking-wider text-ink3 shadow-coro-1 backdrop-blur-sm;
+  }
+
+  /* Buttons — todas las variantes incluyen la base para que funcionen
+     standalone (className="btn-primary" sin necesitar también "btn"). */
+  .btn,
+  .btn-primary,
+  .btn-ghost,
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-coro-sm
+           px-3.5 py-2 text-sm font-medium border transition-all
+           focus:outline-none focus:ring-2 focus:ring-brand/30
+           disabled:opacity-50 disabled:cursor-not-allowed;
+    min-height: 40px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .btn {
+    @apply border-line bg-card text-ink hover:bg-paper2;
+  }
+  .btn-primary {
+    @apply bg-brand text-brand-on border-transparent hover:bg-brand-600;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink2 hover:bg-paper2;
+  }
+  .btn-danger {
+    @apply bg-state-bad text-white border-transparent hover:opacity-90;
+  }
+  /* Modificador de tamaño — se aplica DESPUÉS y prevalece. */
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs gap-1.5;
+    min-height: 32px;
+  }
+  /* Iconos dentro de botones: asegurar tamaño consistente y no deformación. */
+  .btn svg,
+  .btn-primary svg,
+  .btn-ghost svg,
+  .btn-danger svg {
+    @apply w-4 h-4 shrink-0;
+  }
+  .btn-sm svg {
+    @apply w-3.5 h-3.5;
+  }
+  /* Botón icon-only (sin texto, cuadrado): añade .btn-icon. */
+  .btn-icon {
+    @apply px-0 w-10 justify-center;
+    min-width: 40px;
+  }
+  .btn-icon.btn-sm {
+    @apply w-8;
+    min-width: 32px;
+  }
+
+  /* Inputs */
+  .input,
+  .textarea {
+    @apply bg-card border border-line rounded-coro-sm px-3 py-2 text-sm text-ink
+           placeholder:text-ink4 focus:border-brand-ink focus:ring-2 focus:ring-brand/30
+           outline-none transition-colors w-full;
+  }
+  .textarea {
+    @apply min-h-[88px] resize-y;
+  }
+  .label {
+    @apply block text-xs uppercase tracking-wider text-ink3 font-medium mb-1;
+  }
+
+  /* Surfaces */
+  .card {
+    @apply bg-card border border-line rounded-coro shadow-coro-1;
+  }
+
+  /* Badges & pills */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium
+           border border-line bg-paper2 text-ink2;
+  }
+  .badge-brand {
+    @apply bg-brand/15 text-brand-ink border-transparent;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium
+           border border-line bg-paper2 text-ink2;
+  }
+  .pill .dot {
+    @apply inline-block w-1.5 h-1.5 rounded-full bg-ink3;
+  }
+
+  /* Typographic helpers */
+  .eyebrow {
+    @apply font-medium text-ink3;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .h-display {
+    @apply font-display font-normal text-ink;
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+  }
+  h1.h-display {
+    font-size: 3rem;
+  }
+  h2.h-display {
+    font-size: 2rem;
+  }
+  h3.h-display {
+    font-size: 1.4rem;
+  }
+  @media (max-width: 640px) {
+    h1.h-display {
+      font-size: 2.25rem;
+    }
+    h2.h-display {
+      font-size: 1.6rem;
+    }
+    h3.h-display {
+      font-size: 1.2rem;
+    }
+  }
+  .numbers {
+    @apply font-numbers;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+
+  /* Palabra acentuada — subrayado recto en el color de marca. */
+  /* Énfasis de marca. Antes era cursiva + subrayado grueso, que junto al
+     serif de display era LA firma visual del sistema anterior: se reconocía
+     en cualquier captura. Ahora el énfasis lo da el color, no la forma. */
+  /* En `brand-ink` y no en `brand`: es TEXTO. Con el cobalto de fábrica daba
+     igual, pero una marca amarilla quedaba a 1.4:1 sobre el papel. brand-ink
+     se deriva para leerse a 7:1 en los dos temas. */
+  .accent {
+    color: rgb(var(--brand-ink-rgb));
+    font-weight: 800;
+  }
+}
+
+/* ============================================================
+   Correo HTML en modo oscuro
+   El cuerpo de un email es HTML ajeno con colores inline pensados
+   para fondo claro (texto #000, fondos #fff…). En dark no podemos
+   reescribirlos, así que —como hacen los clientes de correo— lo
+   servimos sobre una "hoja" clara con texto y enlaces oscuros.
+   En claro no cambia nada. Los emails de texto plano no llevan
+   esta clase y siguen los tokens del tema.
+   ============================================================ */
+.dark .email-html-content {
+  background: #fffcf6;
+  color: #1a1612;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.dark .email-html-content a {
+  color: #3f4525; /* brand-ink del tema claro: legible sobre la hoja */
+}
+
+/* ============================================================
+   Scrollbar fina (Coro)
+   ============================================================ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--line);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-4);
+}

@@ -1,0 +1,62 @@
+{
+  "ig_message_received": {
+    "X-Zernio-Event": "message.received",
+    "X-Zernio-Event-Id": "00000000-0000-4000-8000-000000000001",
+    "X-Zernio-Signature": "9d97977c514c7f3a170760c9311e2d4ad43109596c1b2108a441d6e3ebfe8178",
+    "X-Late-Event": "message.received",
+    "X-Late-Event-Id": "00000000-0000-4000-8000-000000000001",
+    "X-Late-Signature": "9d97977c514c7f3a170760c9311e2d4ad43109596c1b2108a441d6e3ebfe8178",
+    "User-Agent": "Zernio-Webhooks/1.0",
+    "Content-Type": "application/json"
+  },
+  "ig_message_sent": {
+    "X-Zernio-Event": "message.sent",
+    "X-Zernio-Event-Id": "00000000-0000-4000-8000-000000000009",
+    "X-Zernio-Signature": "bf20352be71aef0503df0704d6fb7a3a480efb87e7c6ae902bd1e84615d17d1b",
+    "X-Late-Event": "message.sent",
+    "X-Late-Event-Id": "00000000-0000-4000-8000-000000000009",
+    "X-Late-Signature": "bf20352be71aef0503df0704d6fb7a3a480efb87e7c6ae902bd1e84615d17d1b",
+    "User-Agent": "Zernio-Webhooks/1.0",
+    "Content-Type": "application/json"
+  },
+  "fb_message_received": {
+    "X-Zernio-Event": "message.received",
+    "X-Zernio-Event-Id": "00000000-0000-4000-8000-000000000012",
+    "X-Zernio-Signature": "0e858c948e64a48d1d9b80dcd658c87713aa9bb8ca65da4f3154fcfec880056d",
+    "X-Late-Event": "message.received",
+    "X-Late-Event-Id": "00000000-0000-4000-8000-000000000012",
+    "X-Late-Signature": "0e858c948e64a48d1d9b80dcd658c87713aa9bb8ca65da4f3154fcfec880056d",
+    "User-Agent": "Zernio-Webhooks/1.0",
+    "Content-Type": "application/json"
+  },
+  "fb_message_sent": {
+    "X-Zernio-Event": "message.sent",
+    "X-Zernio-Event-Id": "00000000-0000-4000-8000-000000000019",
+    "X-Zernio-Signature": "cd90c6473a3b5f1fb8dca6eb13ec435e541f7d961186b0b85f70862417a30787",
+    "X-Late-Event": "message.sent",
+    "X-Late-Event-Id": "00000000-0000-4000-8000-000000000019",
+    "X-Late-Signature": "cd90c6473a3b5f1fb8dca6eb13ec435e541f7d961186b0b85f70862417a30787",
+    "User-Agent": "Zernio-Webhooks/1.0",
+    "Content-Type": "application/json"
+  },
+  "ig_postback_received": {
+    "X-Zernio-Event": "message.received",
+    "X-Zernio-Event-Id": "00000000-0000-4000-8000-000000000022",
+    "X-Zernio-Signature": "191a2a989ccf6e05382a0a6a4737da6f282be083bb57d7422fa566aca170c052",
+    "X-Late-Event": "message.received",
+    "X-Late-Event-Id": "00000000-0000-4000-8000-000000000022",
+    "X-Late-Signature": "191a2a989ccf6e05382a0a6a4737da6f282be083bb57d7422fa566aca170c052",
+    "User-Agent": "Zernio-Webhooks/1.0",
+    "Content-Type": "application/json"
+  },
+  "ig_message_sent_otro_bot": {
+    "X-Zernio-Event": "message.sent",
+    "X-Zernio-Event-Id": "00000000-0000-4000-8000-000000000028",
+    "X-Zernio-Signature": "facd873ac3df92b092f8aea1b0289fd558baf6a18bcb7e17b05ad5fd64f4cb55",
+    "X-Late-Event": "message.sent",
+    "X-Late-Event-Id": "00000000-0000-4000-8000-000000000028",
+    "X-Late-Signature": "facd873ac3df92b092f8aea1b0289fd558baf6a18bcb7e17b05ad5fd64f4cb55",
+    "User-Agent": "Zernio-Webhooks/1.0",
+    "Content-Type": "application/json"
+  }
+}

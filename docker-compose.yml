@@ -1,0 +1,257 @@
+# Chatbot — Docker Compose
+# Servicios: app (FastAPI, también el servidor MCP en /mcp), worker (Celery), beat (Celery Beat),
+# db (Postgres+pgvector), redis, frontend
+# Solo `app` ejecuta migraciones + seed. worker y beat esperan a app healthy.
+
+services:
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnicanal-app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - audios_data:/data/audios
+      # Paquete de CA del simulador de correo (perfil `dev`). Vacío si no se
+      # usan los simuladores; solo se lee si el .env pone SSL_CERT_FILE.
+      - mock_ca:/mock-ca:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # El primer arranque aplica todas las migraciones y siembra datos: puede
+      # pasar del minuto. Con menos margen, worker y beat se dan por fallidos.
+      start_period: 180s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnicanal-worker
+    restart: unless-stopped
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-2}"]
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "false"
+    depends_on:
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - audios_data:/data/audios
+      - mock_ca:/mock-ca:ro
+    # Mismo criterio que en docker-compose.easypanel.yml: sin esto, un worker
+    # muerto o atascado sigue figurando como "arrancado" y nadie se entera —
+    # los mensajes se encolan y no los contesta nadie. `inspect ping` le
+    # pregunta al propio worker por el broker; si no contesta, el contenedor se
+    # marca enfermo y restart: unless-stopped lo reinicia.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks inspect ping -t 10 | grep -q pong"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 180s
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnicanal-beat
+    restart: unless-stopped
+    # --schedule: ruta fija y conocida del fichero de estado de beat, para que
+    # el healthcheck de abajo pueda mirar si se sigue actualizando. Mismo
+    # criterio que en docker-compose.easypanel.yml (ahí está el porqué largo).
+    command: ["celery", "-A", "app.tasks", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "false"
+    depends_on:
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Si beat muere, dejan de dispararse copias, purgas y el latido del worker
+    # sin que nada se ponga en rojo. Beat reescribe su fichero de estado cada
+    # pocos minutos: más de 20 sin tocarlo = no está trabajando.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os,sys,time; p='/tmp/celerybeat-schedule';
+          sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 1200 else 1)"
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 180s
+
+  db:
+    # PostgreSQL 16, con soporte oficial hasta noviembre de 2028. Se queda en la
+    # 16 a propósito: un salto de versión mayor de Postgres obliga a volcar y
+    # recargar los datos, y quien ya tenga esto desplegado no gana nada a cambio
+    # (las dos versiones reciben los mismos parches de seguridad a la vez).
+    # El backend lleva las herramientas de las dos versiones y usa la que
+    # corresponda al servidor, así que si tu instalación corre la 17 esto sigue
+    # funcionando sin tocar nada. Ver backend/app/services/pg_tools.py.
+    image: pgvector/pgvector:pg16
+    container_name: omnicanal-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chatbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-chatbot}
+    # Mismo truco que en docker-compose.easypanel.yml: Postgres solo hace caso a
+    # POSTGRES_PASSWORD la primera vez que se crea el volumen. Si la cambias
+    # después, la base de datos se queda con la vieja y verás "P1000
+    # Authentication failed" en bucle. En cada arranque forzamos que la
+    # contraseña sea la de la variable. Es idempotente y no toca los datos.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        rm -f /tmp/db-password-synced
+        (
+          until pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -h /var/run/postgresql >/dev/null 2>&1; do
+            sleep 1
+          done
+          # Por stdin, no con -c: psql solo sustituye :'pwd' cuando lee el SQL de
+          # la entrada estándar o de un fichero.
+          for _ in $$(seq 1 30); do
+            if printf '%s\n' "ALTER USER \"$$POSTGRES_USER\" WITH PASSWORD :'pwd';" \
+                 | psql -q -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" \
+                        -h /var/run/postgresql -v pwd="$$POSTGRES_PASSWORD" \
+                        >/dev/null 2>/tmp/db-password-sync.err; then
+              echo "[db] Contraseña de $$POSTGRES_USER sincronizada con POSTGRES_PASSWORD."
+              touch /tmp/db-password-synced
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "[db] ERROR: no se ha podido sincronizar la contraseña de $$POSTGRES_USER." >&2
+          cat /tmp/db-password-sync.err >&2
+        ) &
+        exec docker-entrypoint.sh postgres
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # "Sana" = acepta conexiones Y la contraseña ya está sincronizada.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" && test -f /tmp/db-password-synced"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: omnicanal-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Valor de RESPALDO, horneado en el build. El Dockerfile del panel lo
+        # exige, pero ya no es la única forma de fijar la URL: manda
+        # API_BASE_URL, aquí abajo, que se lee en cada arranque.
+        VITE_API_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
+    container_name: omnicanal-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    environment:
+      # URL pública del backend, en RUNTIME: el arranque del contenedor genera
+      # /config.js con ella (frontend/docker-entrypoint.d/40-app-config.sh) y el
+      # panel la usa ANTES que el valor de build. Vacía = cae al valor de build.
+      API_BASE_URL: ${API_BASE_URL:-}
+      # Base del servidor MCP que enseña Conexiones → API / MCP. Vacía (lo
+      # normal) = la de la API, que es quien sirve /mcp: http://localhost:8000/mcp.
+      MCP_BASE_URL: ${MCP_BASE_URL:-}
+      # Nombre visible de la instalación (login, menú lateral, pestaña del
+      # navegador). Vacío = el panel cae al valor de build o a "Chatbot".
+      APP_NAME: ${APP_NAME:-}
+    depends_on:
+      - app
+    # Pide su propio index.html por dentro (wget viene en la imagen de nginx, no
+    # se descarga nada). Sin esto el panel salía siempre como "arrancado" y
+    # nunca como "sano", que es lo que se mira para dar el arranque por bueno.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Simuladores de YCloud, LLM, Retell, Zernio y correo (backend/tests/mocks). SOLO
+  # con el perfil `dev`: `docker compose --profile dev up -d`. Sin el perfil no
+  # arrancan y nada cambia. Nunca van en docker-compose.easypanel.yml.
+  #
+  # Para que el backend hable con ellos hay que decírselo en el .env (bloque
+  # "Probar sin cuentas" de .env.desarrollo.example): YCLOUD_BASE_URL,
+  # RETELL_BASE_URL, ZERNIO_BASE_URL y, para el correo, SSL_CERT_FILE con el paquete de CA que
+  # los simuladores dejan en el volumen `mock_ca` (TLS verificado de verdad,
+  # sin atajos). El LLM se da de alta como proveedor desde el panel o con
+  # scripts/smoke_simuladores.py.
+  #
+  # Imagen genérica de Python y no la del backend: la imagen del backend no
+  # lleva tests/ (backend/.dockerignore) y así sigue sin llevarlos.
+  mocks:
+    profiles: [dev]
+    image: python:3.12-slim
+    container_name: omnicanal-mocks
+    working_dir: /srv
+    command:
+      - sh
+      - -c
+      - >-
+        pip install -q --disable-pip-version-check --root-user-action=ignore
+        fastapi==0.115.0 pydantic==2.9.2 uvicorn==0.30.6 httpx==0.27.2
+        cryptography==44.0.3 aiosmtpd==1.4.6 certifi
+        && python -m tests.mocks
+    environment:
+      MOCKS_HOST: 0.0.0.0
+      IMAP_MOCK_CERT_DIR: /mock-ca
+      # A dónde manda el simulador los webhooks cuando el CRM no registró su
+      # endpoint por la API (en local no lo hace: la URL no es pública).
+      WA_MOCK_WEBHOOK_URL: http://app:8000/api/v1/webhooks/ycloud
+      RETELL_MOCK_WEBHOOK_URL: http://app:8000/api/v1/voice/retell/webhook
+      ZERNIO_MOCK_WEBHOOK_URL: http://app:8000/api/v1/webhooks/zernio
+    ports:
+      # Solo las rutas HTTP (API simulada + control), para poder lanzar el
+      # smoke desde el ordenador. IMAP y SMTP se ven solo dentro de la red.
+      - "9101-9105:9101-9105"
+    volumes:
+      - ./backend/tests:/srv/tests:ro
+      - mock_ca:/mock-ca
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9101/_mock/salud')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+volumes:
+  db_data:
+  redis_data:
+  audios_data:
+  mock_ca:

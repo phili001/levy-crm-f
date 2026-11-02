@@ -1,0 +1,113 @@
+{
+  "name": "CRM · Mandar foto de un tratamiento",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Herramienta: mandar la foto de un tratamiento\n\nSofía la usa cuando el paciente quiere ver cómo es un tratamiento. El CRM llama a este webhook con el tratamiento elegido y le manda al paciente la foto que devuelve el flujo.\n\n**1. Header Auth.** En «Webhook del CRM» → Credential for Header Auth → crea una con **Name** `X-Omnicanal-Token` y **Value** el secreto que te da el CRM («Copiar el secreto»).\n\n**2. Tus fotos.** En «Busca la foto», cambia las URL por las de tu clínica: públicas, https, JPG o PNG (un .webp no sirve).\n\n**3. Publica el flujo** y copia la **Production URL** del Webhook.\n\n**4. En el CRM:** Conexiones → n8n → «Nueva»\n- Nombre: `mandar_foto_tratamiento`\n- Para qué sirve: «Manda al paciente una foto del tratamiento que le interesa. Úsala cuando pida ver fotos o cómo es el tratamiento.»\n- Datos que pide: `tratamiento`, tipo Opciones: blanqueamiento, ortodoncia, implantes\n- URL del webhook: la Production URL\n- Tipo: Solo consulta\n",
+        "height": 600,
+        "width": 420,
+        "color": 4
+      },
+      "id": "af00f17c-f345-563b-ac46-96cb50f0aeba",
+      "name": "Nota 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "foto-tratamiento",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4e575b59-367f-5163-be00-cdddac2c525b",
+      "name": "Webhook del CRM",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "4ea03202-23bb-5e14-b2e6-62bc37ed422a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Las fotos de cada tratamiento. Cambia las URL por las de tu clínica:\n// tienen que ser públicas (https://) y JPG o PNG, de hasta 5 MB.\n// La clave (blanqueamiento, ortodoncia…) es la opción que elige Sofía:\n// tiene que coincidir con las «Opciones» del dato en el CRM.\nconst FOTOS = {\n  blanqueamiento: {\n    url: 'https://clinicasonrisaperfecta.site/media/fotos/blanqueamiento.jpg',\n    pie: 'Blanqueamiento en Sonrisa Perfecta',\n  },\n  ortodoncia: {\n    url: 'https://clinicasonrisaperfecta.site/media/fotos/ortodoncia.jpg',\n    pie: 'Ortodoncia en Sonrisa Perfecta',\n  },\n  implantes: {\n    url: 'https://clinicasonrisaperfecta.site/media/fotos/implantes.jpg',\n    pie: 'Implantes en Sonrisa Perfecta',\n  },\n};\n\n// Lo que manda el CRM llega en el cuerpo del webhook.\nconst llamada = $input.first().json.body || {};\nconst sinAcentos = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();\nconst pedido = sinAcentos(llamada.args?.tratamiento);\nconst foto = FOTOS[pedido];\n\nif (!pedido) {\n  return [{ json: { resultado: `No me dijeron de qué tratamiento. Tengo fotos de: ${Object.keys(FOTOS).join(', ')}.` } }];\n}\nif (!foto) {\n  // Sin archivo: Sofía lee esto y se lo explica al paciente.\n  return [{ json: { resultado: `No tengo fotos de «${pedido}». Tengo de: ${Object.keys(FOTOS).join(', ')}.` } }];\n}\n\n// `resultado` es lo que lee Sofía; `archivos`, lo que el CRM le manda al paciente.\nreturn [{\n  json: {\n    resultado: `Listo: el CRM le manda al paciente una foto de ${pedido}.`,\n    archivos: [{ tipo: 'imagen', url: foto.url, pie: foto.pie, nombre: `${pedido}.jpg` }],\n  },\n}];\n"
+      },
+      "id": "d81a7570-57c1-5314-9f37-0665043257c3",
+      "name": "Busca la foto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "id": "035ddae4-c613-57fa-9b0f-890e4fc7cab9",
+      "name": "Contesta al CRM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Lo que llega y lo que sale\n\n**Llega** (en `body`):\n`{\"evento\": \"herramienta\", \"herramienta\": \"mandar_foto_tratamiento\", \"args\": {\"tratamiento\": \"blanqueamiento\"}, \"prueba\": false, …}`\n\n**Sale** (Respond to Webhook):\n`{\"resultado\": \"texto para Sofía\", \"archivos\": [{\"tipo\": \"imagen\", \"url\": \"https://…\", \"pie\": \"…\"}]}`\n\nHasta 3 archivos: imagen, audio, video o documento. Con «Probar» del CRM llega `prueba: true` y no se le manda nada a nadie.\n",
+        "height": 260,
+        "width": 640,
+        "color": 7
+      },
+      "id": "18446d49-544c-54ff-b6e7-f4a9ed6bba2d",
+      "name": "Nota 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook del CRM": {
+      "main": [
+        [
+          {
+            "node": "Busca la foto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca la foto": {
+      "main": [
+        [
+          {
+            "node": "Contesta al CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

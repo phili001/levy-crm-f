@@ -1,0 +1,148 @@
+{
+  "name": "CRM · Consultar precio en hoja de Google",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Herramienta: consultar un precio en tu hoja de Google\n\nLa clínica tiene sus precios en una hoja de Google y los cambia ahí. Sofía consulta la hoja cuando le preguntan cuánto cuesta algo, en vez de repetir un precio viejo.\n\n**1. La hoja.** Primera fila con estos títulos: `tratamiento`, `precio`, `duracion`, `notas`. Una fila por tratamiento.\n\n**2. Google Sheets.** En «Lee la lista de precios», conecta tu cuenta de Google y elige el documento y la hoja.\n\n**3. Header Auth** en «Webhook del CRM»: **Name** `X-Omnicanal-Token`, **Value** el secreto del CRM.\n\n**4. Publica** y copia la **Production URL**.\n\n**5. En el CRM:** Conexiones → n8n → «Nueva»\n- Nombre: `consultar_precio`\n- Para qué sirve: «Busca el precio vigente de un tratamiento en la lista de precios de la clínica. Úsala cuando el paciente pregunte cuánto cuesta algo.»\n- Datos que pide: `tratamiento`, tipo Texto\n- Tipo: Solo consulta\n",
+        "height": 660,
+        "width": 420,
+        "color": 4
+      },
+      "id": "5552d8af-86e6-5d7c-b9cc-4c143bd6d5fc",
+      "name": "Nota 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "consultar-precio",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f242ca22-131c-5605-98aa-518f7585c03a",
+      "name": "Webhook del CRM",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "9b70b892-81a0-537c-9e13-d9d52bb89ca9"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "options": {}
+      },
+      "id": "7731e91f-8037-5dec-9ad9-2ffda4e99177",
+      "name": "Lee la lista de precios",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        240,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lo que pidió Sofía y las filas de la hoja (columnas: tratamiento, precio,\n// duracion, notas). Se compara sin acentos ni mayúsculas.\nconst llamada = $('Webhook del CRM').first().json.body || {};\nconst sinAcentos = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();\nconst pedido = sinAcentos(llamada.args?.tratamiento);\nconst filas = $input.all().map((i) => i.json).filter((f) => f.tratamiento);\n\nif (!pedido) {\n  return [{ json: { resultado: 'No me dijeron qué tratamiento buscar.' } }];\n}\n\nconst fila =\n  filas.find((f) => sinAcentos(f.tratamiento) === pedido) ||\n  filas.find((f) => sinAcentos(f.tratamiento).includes(pedido) || pedido.includes(sinAcentos(f.tratamiento)));\n\nif (!fila) {\n  const hay = filas.map((f) => f.tratamiento).join(', ');\n  return [{ json: { resultado: `«${llamada.args.tratamiento}» no está en la lista de precios. Los que hay: ${hay}.` } }];\n}\n\nlet texto = `${fila.tratamiento}: ${fila.precio}`;\nif (fila.duracion) texto += `, dura ${fila.duracion}`;\ntexto += '.';\nif (fila.notas) texto += ` ${fila.notas}.`;\nreturn [{ json: { resultado: texto } }];\n"
+      },
+      "id": "e4744f87-3ddc-5cb2-8ef8-d358c2c881b6",
+      "name": "Busca el tratamiento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "id": "3ffa5949-6ca5-5d24-a47b-101101267405",
+      "name": "Contesta al CRM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Ejemplo de hoja\n\n| tratamiento | precio | duracion | notas |\n|---|---|---|---|\n| Limpieza | $650 | 45 min | Incluye revisión |\n| Blanqueamiento | $4,500 | 1 h 30 min | Dos sesiones |\n| Ortodoncia | Desde $28,000 | 18 a 24 meses | Valoración sin costo |\n\nSi la hoja no tiene el tratamiento, Sofía recibe la lista de los que sí hay.\n",
+        "height": 260,
+        "width": 760,
+        "color": 7
+      },
+      "id": "a586ebaf-c97c-53d1-9e87-3cbde0d0c7ee",
+      "name": "Nota 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook del CRM": {
+      "main": [
+        [
+          {
+            "node": "Lee la lista de precios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lee la lista de precios": {
+      "main": [
+        [
+          {
+            "node": "Busca el tratamiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca el tratamiento": {
+      "main": [
+        [
+          {
+            "node": "Contesta al CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

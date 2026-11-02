@@ -1,0 +1,58 @@
+{
+  "$comentario": [
+    "Permisos preaprobados de la copia entregable: solo lo que mira y no cambia",
+    "nada. Todo lo demás pide permiso, una vez por acción.",
+    "Sin preguntar: ver el estado, verificar, esperar a que arranque, las URLs,",
+    "el DNS, los archivos de esta carpeta y las herramientas del MCP que solo",
+    "leen. Con permiso: conectar canales (`connect` puede comprar un número o",
+    "encender el envío automático del correo), actualizar, `curl`, leer fuera de",
+    "esta carpeta y `get_service` (con `reveal` devuelve las contraseñas).",
+    "Negado: lo que pide llaves (van en la terminal de la persona), `rollback` y",
+    "`uninstall`, y leer las llaves: ~/.omnicanal, ~/.claude.json (el token de",
+    "Coolify que guarda `mcp-setup`), ~/.ssh y los .env.",
+    "El agente lee registros en los que cualquiera puede escribir (la ruta y el",
+    "navegador de cada visita): por eso nada que saque datos o escriba en",
+    "Coolify corre sin que la persona lo vea."
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(python3 scripts/omni.py doctor:*)",
+      "Bash(python3 scripts/omni.py status:*)",
+      "Bash(python3 scripts/omni.py verify:*)",
+      "Bash(python3 scripts/omni.py wait:*)",
+      "Bash(python3 scripts/omni.py urls:*)",
+      "Bash(git status:*)",
+      "Bash(dig:*)",
+      "Read(./**)",
+      "mcp__coolify__get_version",
+      "mcp__coolify__get_mcp_version",
+      "mcp__coolify__list_servers",
+      "mcp__coolify__get_server",
+      "mcp__coolify__list_projects",
+      "mcp__coolify__list_services",
+      "mcp__coolify__logs",
+      "mcp__coolify__list_deployments",
+      "mcp__coolify__diagnose_app",
+      "mcp__coolify__diagnose_server",
+      "mcp__coolify__get_infrastructure_overview"
+    ],
+    "ask": [
+      "Bash(python3 scripts/omni.py update:*)",
+      "Bash(python3 scripts/omni.py connect:*)",
+      "Bash(curl:*)",
+      "mcp__coolify__get_service"
+    ],
+    "deny": [
+      "Bash(python3 scripts/omni.py secret set:*)",
+      "Bash(python3 scripts/omni.py save-key:*)",
+      "Bash(python3 scripts/omni.py mcp-setup:*)",
+      "Bash(python3 scripts/omni.py uninstall:*)",
+      "Bash(python3 scripts/omni.py rollback:*)",
+      "Read(~/.omnicanal/**)",
+      "Read(~/.claude.json)",
+      "Read(~/.ssh/**)",
+      "Read(./.instalacion/**)",
+      "Read(**/.env)"
+    ]
+  }
+}

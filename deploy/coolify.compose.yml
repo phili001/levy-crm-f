@@ -1,0 +1,331 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CRM Omnicanal — compose para Coolify (instalación de un solo dominio).
+#
+# Diferencias con docker-compose.easypanel.yml, que es el camino antiguo:
+#
+#   - No construye nada: usa las imágenes ya publicadas en GHCR. El VPS no
+#     compila (un build de estos en 2 GB de RAM se queda sin memoria) y la
+#     instalación tarda minutos en vez de media hora.
+#   - Un solo dominio. El panel lo recibe de Coolify y la API cuelga de él:
+#     el nginx del panel reenvía /api, /widget.js, /audios y /health
+#     (frontend/nginx.conf). Sin subdominios que crear ni certificados extra.
+#   - Se crea en Coolify como **service** con este YAML pegado
+#     (docker_compose_raw). Desde Coolify 4.1 ya no existe el tipo "aplicación
+#     docker-compose", así que no hay repositorio conectado ni webhooks.
+#
+# Variables mágicas de Coolify que se usan aquí:
+#   SERVICE_FQDN_FRONTEND_80  declara el dominio del servicio `frontend` y lo
+#                             enruta al puerto 80. Coolify genera el dominio (o
+#                             respeta el que pongas) y pide el certificado.
+#   SERVICE_FQDN_FRONTEND     ese mismo dominio. OJO: Coolify 4.3 lo entrega
+#                             PELADO (sin https://), aunque su documentación
+#                             diga otra cosa. El backend le pone el esquema al
+#                             leerlo (core/config.py), así que aquí se deja tal
+#                             cual; para las URLs que
+#                             la app necesita saber de sí misma.
+#
+#   SERVICE_PASSWORD_*        Coolify genera cada una UNA vez, al crear el service,
+#                             y la guarda en sus variables: nadie teclea secretos.
+#                             POSTGRES (base), 64_JWT (sesiones), 64_CIFRADO (la
+#                             llave de cifrado, que el backend deriva a Fernet) y
+#                             ARRANQUE (el código para crear el administrador en
+#                             el primer arranque; solo lo ve quien entra a Coolify).
+#
+# ⚠️ NO pegues este compose sobre una instalación que ya existe ni cambies el
+# nombre de esas variables: Coolify generaría otras, y con una llave de cifrado
+# nueva lo ya cifrado (credenciales, notas, transcripciones) queda ilegible para
+# siempre. Para subir de versión está `omni.py update`, que solo cambia
+# APP_VERSION.
+#
+# APP_VERSION trae por defecto la versión de este repositorio (nunca `latest`:
+# Docker reutilizaría la imagen vieja). La guía de instalación paso a paso es
+# INSTALAR.md, en la raíz del repositorio.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  db:
+    # Misma imagen y misma sincronización de contraseña que en el camino de
+    # EasyPanel: Postgres solo hace caso a POSTGRES_PASSWORD cuando crea el
+    # volumen, así que sin esto cambiar la contraseña deja al backend fuera
+    # para siempre con "P1000 Authentication failed" y sin pista de por qué.
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-omnicanal}
+      POSTGRES_DB: ${POSTGRES_DB:-omnicanal}
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+    entrypoint:
+      - bash
+      - -c
+      - |
+        rm -f /tmp/db-password-synced
+        (
+          until pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -h /var/run/postgresql >/dev/null 2>&1; do
+            sleep 1
+          done
+          for _ in $$(seq 1 30); do
+            if printf '%s\n' "ALTER USER \"$$POSTGRES_USER\" WITH PASSWORD :'pwd';" \
+                 | psql -q -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" \
+                        -h /var/run/postgresql -v pwd="$$POSTGRES_PASSWORD" \
+                        >/dev/null 2>/tmp/db-password-sync.err; then
+              echo "[db] Contraseña de $$POSTGRES_USER sincronizada con POSTGRES_PASSWORD."
+              touch /tmp/db-password-synced
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "[db] ERROR: no se ha podido sincronizar la contraseña de $$POSTGRES_USER." >&2
+          cat /tmp/db-password-sync.err >&2
+        ) &
+        exec docker-entrypoint.sh postgres
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" && test -f /tmp/db-password-synced"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # appendonly: el buffer de mensajes y los bloqueos viven aquí. Sin AOF, un
+    # reinicio del VPS se lleva por delante lo que estuviera esperando.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  app:
+    image: ghcr.io/${GHCR_OWNER:-carlos-dominguez-faber}/crm-omnicanal-imperial-backend:${APP_VERSION:-1.3.3}
+    # ⚠️ UNA SOLA INSTANCIA de app, worker y beat. Con réplicas se duplican el
+    # buffer de mensajes y las tareas periódicas, y con ellas los envíos.
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      APP_PORT: "8000"
+      # Un solo dominio: el de la app y el del panel son el mismo.
+      APP_BASE_URL: ${SERVICE_FQDN_FRONTEND}
+      FRONTEND_BASE_URL: ${SERVICE_FQDN_FRONTEND}
+      # El panel llama a la API desde su propio origen, así que basta con el
+      # dominio del CRM. Si sirves el widget desde la web de la clínica, añade
+      # ese dominio aquí (con https y sin barra final).
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-${SERVICE_FQDN_FRONTEND}}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-omnicanal}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-omnicanal}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
+      JWT_EXPIRATION_HOURS: "24"
+      # La genera Coolify (variable mágica) y no tiene formato Fernet: el backend
+      # la deriva y avisa en los logs (backend/app/core/encryption.py). El panel
+      # la enseña una vez, al crear el administrador, para que el dueño la guarde.
+      ENCRYPTION_KEY: ${SERVICE_PASSWORD_64_CIFRADO}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      SETUP_CODE: ${SERVICE_PASSWORD_ARRANQUE}
+      SEED_PROFILE: ${SEED_PROFILE:-dental-mx}
+      AUDIO_STORAGE_PATH: /data/audios
+      DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-gpt-5.4-mini}
+      MESSAGE_BUFFER_SECONDS: ${MESSAGE_BUFFER_SECONDS:-8}
+      RESPONSE_SPLIT_MAX_PARTS: ${RESPONSE_SPLIT_MAX_PARTS:-3}
+      APP_NAME: ${APP_NAME:-CRM Omnicanal}
+      # Dos proxies por delante: Traefik (que termina el TLS) y el nginx del
+      # panel. Con Cloudflare en modo proxy delante, son 3. Mal puesto, el
+      # límite de intentos de login se vuelve global y deja a todos fuera:
+      # SECURITY.md § 6.6.
+      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-2}
+      DASHBOARD_TIMEZONE: ${BUSINESS_TZ:-America/Cancun}
+      UPLOADS_PATH: ${UPLOADS_PATH:-/data/audios/uploads}
+      BACKUP_DIR: ${BACKUP_DIR:-/data/audios/backups}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_RETENTION_MAX_FILES: ${BACKUP_RETENTION_MAX_FILES:-14}
+      BACKUP_MIN_FREE_GB: ${BACKUP_MIN_FREE_GB:-2.0}
+      EMAIL_RETENTION_MONTHS: ${EMAIL_RETENTION_MONTHS:-6}
+      AUDIO_RETENTION_DAYS: ${AUDIO_RETENTION_DAYS:-270}
+      MEDIA_RETENTION_DAYS: ${MEDIA_RETENTION_DAYS:-180}
+      TRACE_RETENTION_DAYS: ${TRACE_RETENTION_DAYS:-30}
+      LLM_USAGE_RETENTION_DAYS: ${LLM_USAGE_RETENTION_DAYS:-90}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
+      OUTBOUND_RETENTION_DAYS: ${OUTBOUND_RETENTION_DAYS:-180}
+      RESOLVED_GAP_RETENTION_DAYS: ${RESOLVED_GAP_RETENTION_DAYS:-180}
+      MIN_TEXT_BUFFER_SECONDS: ${MIN_TEXT_BUFFER_SECONDS:-6}
+      AGENT_AUTORESPONSE_DEFAULT: ${AGENT_AUTORESPONSE_DEFAULT:-true}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      INSTAGRAM_OAUTH_CLIENT_ID: ${INSTAGRAM_OAUTH_CLIENT_ID:-}
+      INSTAGRAM_OAUTH_CLIENT_SECRET: ${INSTAGRAM_OAUTH_CLIENT_SECRET:-}
+      APP_VERSION: ${APP_VERSION:-1.3.3}
+      # Solo este servicio migra y siembra. worker y beat NO.
+      RUN_MIGRATIONS: "true"
+    volumes:
+      - audios_data:/data/audios
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # El primer arranque aplica todas las migraciones y siembra: en un VPS
+      # modesto pasa del minuto.
+      start_period: 180s
+
+  worker:
+    image: ghcr.io/${GHCR_OWNER:-carlos-dominguez-faber}/crm-omnicanal-imperial-backend:${APP_VERSION:-1.3.3}
+    # 2 por defecto, no 4: en un VPS de 2 GB cada proceso extra es RAM que le
+    # quita a Postgres. Se sube con WORKER_CONCURRENCY si el servidor da más.
+    command: celery -A app.tasks worker --loglevel=info --concurrency=${WORKER_CONCURRENCY:-2}
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      APP_BASE_URL: ${SERVICE_FQDN_FRONTEND}
+      FRONTEND_BASE_URL: ${SERVICE_FQDN_FRONTEND}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-omnicanal}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-omnicanal}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
+      ENCRYPTION_KEY: ${SERVICE_PASSWORD_64_CIFRADO}
+      # validate_production() corre en todo proceso que importe la config: sin
+      # admin en las variables, necesita el código de arranque también aquí.
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      SETUP_CODE: ${SERVICE_PASSWORD_ARRANQUE}
+      SEED_PROFILE: ${SEED_PROFILE:-dental-mx}
+      AUDIO_STORAGE_PATH: /data/audios
+      DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-gpt-5.4-mini}
+      MESSAGE_BUFFER_SECONDS: ${MESSAGE_BUFFER_SECONDS:-8}
+      RESPONSE_SPLIT_MAX_PARTS: ${RESPONSE_SPLIT_MAX_PARTS:-3}
+      APP_NAME: ${APP_NAME:-CRM Omnicanal}
+      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-2}
+      DASHBOARD_TIMEZONE: ${BUSINESS_TZ:-America/Cancun}
+      UPLOADS_PATH: ${UPLOADS_PATH:-/data/audios/uploads}
+      # Las copias y las purgas de retención corren AQUÍ: si cambias una de
+      # estas solo en `app`, no pasa nada.
+      BACKUP_DIR: ${BACKUP_DIR:-/data/audios/backups}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_RETENTION_MAX_FILES: ${BACKUP_RETENTION_MAX_FILES:-14}
+      BACKUP_MIN_FREE_GB: ${BACKUP_MIN_FREE_GB:-2.0}
+      BACKUP_FILE_PREFIX: ${BACKUP_FILE_PREFIX:-}
+      EMAIL_RETENTION_MONTHS: ${EMAIL_RETENTION_MONTHS:-6}
+      AUDIO_RETENTION_DAYS: ${AUDIO_RETENTION_DAYS:-270}
+      MEDIA_RETENTION_DAYS: ${MEDIA_RETENTION_DAYS:-180}
+      TRACE_RETENTION_DAYS: ${TRACE_RETENTION_DAYS:-30}
+      LLM_USAGE_RETENTION_DAYS: ${LLM_USAGE_RETENTION_DAYS:-90}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
+      OUTBOUND_RETENTION_DAYS: ${OUTBOUND_RETENTION_DAYS:-180}
+      RESOLVED_GAP_RETENTION_DAYS: ${RESOLVED_GAP_RETENTION_DAYS:-180}
+      MIN_TEXT_BUFFER_SECONDS: ${MIN_TEXT_BUFFER_SECONDS:-6}
+      AGENT_AUTORESPONSE_DEFAULT: ${AGENT_AUTORESPONSE_DEFAULT:-true}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      INSTAGRAM_OAUTH_CLIENT_ID: ${INSTAGRAM_OAUTH_CLIENT_ID:-}
+      INSTAGRAM_OAUTH_CLIENT_SECRET: ${INSTAGRAM_OAUTH_CLIENT_SECRET:-}
+      APP_VERSION: ${APP_VERSION:-1.3.3}
+      RUN_MIGRATIONS: "false"
+    volumes:
+      - audios_data:/data/audios
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks inspect ping -t 10 | grep -q pong"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 180s
+
+  beat:
+    image: ghcr.io/${GHCR_OWNER:-carlos-dominguez-faber}/crm-omnicanal-imperial-backend:${APP_VERSION:-1.3.3}
+    command: celery -A app.tasks beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      APP_BASE_URL: ${SERVICE_FQDN_FRONTEND}
+      FRONTEND_BASE_URL: ${SERVICE_FQDN_FRONTEND}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      SETUP_CODE: ${SERVICE_PASSWORD_ARRANQUE}
+      SEED_PROFILE: ${SEED_PROFILE:-dental-mx}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-omnicanal}:${SERVICE_PASSWORD_POSTGRES}@db:5432/${POSTGRES_DB:-omnicanal}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
+      ENCRYPTION_KEY: ${SERVICE_PASSWORD_64_CIFRADO}
+      APP_VERSION: ${APP_VERSION:-1.3.3}
+      RUN_MIGRATIONS: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    # beat reescribe su fichero de estado cada pocos minutos. Si lleva más de
+    # 20 sin tocarlo, está muerto — y el síntoma que se ve en el panel es "el
+    # worker no late", aunque el worker esté perfectamente.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os,sys,time; p='/tmp/celerybeat-schedule';
+          sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 1200 else 1)"
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 180s
+
+  frontend:
+    image: ghcr.io/${GHCR_OWNER:-carlos-dominguez-faber}/crm-omnicanal-imperial-frontend:${APP_VERSION:-1.3.3}
+    restart: unless-stopped
+    environment:
+      # El dominio del CRM. Coolify lo crea, lo enruta al puerto 80 y pide el
+      # certificado a Let's Encrypt.
+      - SERVICE_FQDN_FRONTEND_80
+      # Vacía A PROPÓSITO: el panel usa su propio origen y el nginx de esta
+      # imagen reenvía /api a la API. Poner aquí un dominio solo tiene sentido
+      # si algún día la API vive aparte.
+      - API_BASE_URL=
+      # Vacía A PROPÓSITO, como API_BASE_URL: el servidor MCP lo sirve la API
+      # en /mcp (desde la 1.2.0) y este nginx se lo reenvía, así que el panel
+      # enseña https://<dominio-del-crm>/mcp. Solo tiene sentido si algún día el
+      # MCP vive en otro dominio.
+      - MCP_BASE_URL=${MCP_BASE_URL:-}
+      - APP_NAME=${APP_NAME:-CRM Omnicanal}
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # No hay servicio aparte para el MCP, y no debe haberlo: lo sirve `app` en
+  # /mcp (backend/app/mcp_server.py) y el nginx del panel lo reenvía. `omni.py
+  # update` solo cambia APP_VERSION; el compose que Coolify guardó el día de la
+  # instalación no cambia, así que un servicio nuevo no llegaría nunca a las
+  # instalaciones que ya existen.
+
+volumes:
+  db_data:
+  redis_data:
+  audios_data:
